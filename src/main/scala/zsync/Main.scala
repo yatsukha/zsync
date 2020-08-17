@@ -1,28 +1,47 @@
 package zsync
 
+import zio.{config => _, _}
+import zio.blocking.Blocking
+import console._
+import nio.file.Files
+
 object Main extends zio.App {
-  import zio._
-  import console._
-  import zsync.config._
-  import zsync.util._
 
-  override def run(args: List[String]): URIO[ZEnv, ExitCode] = {
-    def printConfig: ZIO[Console with Config, Nothing, Unit] =
-      ZIO.access[Config](
-        using(_)(identity)
-      ) flatMap (c => putStrLn(s"${c.base} ${c.directories}"))
+  lazy val bootstrap = (context.live ++ Blocking.live) >>> config.live
 
-    printConfig.provideCustomLayer(configLive) foldM (err =>
-      (err match {
-        case _: NoSuchElementException =>
-          putStrLnErr(
-            s"Error while reading app config file: '${err.getMessage}'."
-          )
-        case _: NullPointerException =>
-          putStrLnErr("Error while trying to open app config file.")
-        case _ =>
-          putStrLnErr("Unkown error occured while trying to read app config.")
-      }) *> putStrLnErr("This is not an user error!") as ExitCode(1),
-    _ => ZIO.unit as ExitCode(0))
-  }
+  val program
+    : ZIO[Console with Blocking with config.ConfigPaths, Throwable, Unit] =
+    config.exists
+      .flatMap(_ match {
+        case true  => putStrLn("Picked up user config.")    *> config.read
+        case false => putStrLn("No user config, creating.") *> config.create
+      })
+      .as(ExitCode(0))
+
+  def printCommand(args: List[String]) =
+    app
+      .parse(args)
+      .foldM(
+        _ => putStrLnErr("Error while expanding path arguments."),
+        _ match {
+          case Some(value) => putStrLn("Command: " + value.toString)
+          case None        => putStrLn("Invalid command.") // TODO: add help
+        }
+      )
+
+  def printConfig: ZIO[Console with config.ConfigPaths, Nothing, Unit] =
+    ZIO
+      .access[config.ConfigPaths](identity)
+      .flatMap(hasCfg => {
+        val cfg = hasCfg.get
+        putStrLn(s"${cfg.base} ${cfg.directories}")
+      })
+
+  override def run(args: List[String]): URIO[ZEnv, ExitCode] =
+    printConfig
+      .provideCustomLayer(bootstrap)
+      .foldM(
+        err => putStrErr(s"Unrecoverable error: $err").as(ExitCode(1)),
+        _   => ZIO.unit.as(ExitCode(0))
+      )
 }
