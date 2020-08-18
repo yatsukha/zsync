@@ -15,28 +15,30 @@ package object context {
 
   type Context = Has[Service]
 
-  val live: ZLayer[system.System, Throwable, Context] =
-    ZLayer.fromEffect(
-      system
-        .env("HOME")
-        .flatMap(_ match {
-          case None => ZIO.fail(new RuntimeException("No $HOME in path."))
-          case Some(h) =>
-            system
-              .property("user.dir")
-              .flatMap(_ match {
-                case None =>
-                  ZIO.fail(
-                    new RuntimeException("Can not deduce working directory.")
-                  )
-                case Some(wd) =>
-                  ZIO.succeed(new Service {
-                    override val home: Path             = Path(h)
-                    override val workingDirectory: Path = Path(wd)
-                  })
-              })
-        })
-    )
+  object Context {
+    val live: ZLayer[system.System, Throwable, Context] =
+      ZLayer.fromEffect(
+        system
+          .env("HOME")
+          .flatMap(_ match {
+            case None => ZIO.fail(new RuntimeException("No $HOME in path."))
+            case Some(h) =>
+              system
+                .property("user.dir")
+                .flatMap(_ match {
+                  case None =>
+                    ZIO.fail(
+                      new RuntimeException("Can not deduce working directory.")
+                    )
+                  case Some(wd) =>
+                    ZIO.succeed(new Service {
+                      override val home: Path             = Path(h)
+                      override val workingDirectory: Path = Path(wd)
+                    })
+                })
+          })
+      )
+  }
 
   def toNormalizedPath(p: String): ZIO[Blocking with Context, Throwable, Path] =
     ZIO

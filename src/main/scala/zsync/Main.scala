@@ -4,41 +4,60 @@ import zio.{config => _, _}
 import zio.blocking.Blocking
 import console._
 import nio.file.Files
+import zsync.context._
+import zsync.config._
+import zsync.app.Add
+import zsync.app.Remove
+import zsync.app.Backup
+import zsync.app.Help
 
 object Main extends zio.App {
 
-  lazy val bootstrap = (context.live ++ Blocking.live) >>> config.live
+  lazy val help: ZIO[Console, Nothing, Unit] = putStrLn(
+    """
+    |zsync 0.0.1 - a lacking rsync clone written using ZIO
+    |
+    |usage:
+    |  zsync <action> [argument...]
+    |
+    |action can be any of the following, with respective arguments:
+    |
+    |  help
+    |    - outputs this text
+    |
+    |  add <directory> [method]
+    |    - ads the given directory to the list of directories that 
+    |      should backed up optionally specifying the method
+    |    - method can be 'recursive' which is the default and backups 
+    |      all files in the given directory, or 'git' which uses git 
+    |      ls-files to get the list of files to backup, while also 
+    |      adding the .git subdirectory
+    |
+    |  remove <directory> 
+    |    - removes the given directory from the backup list
+    |  
+    |  backup <destination>
+    |    - backs up files to given destination, write more here
+  """.stripMargin
+  )
 
-  val program
-    : ZIO[Console with Blocking with config.ConfigPaths, Throwable, Unit] =
+  // TODO: add interpreting of commands
+  // TODO: add updating of backup list
+
+  def program(
+    args: List[String]
+  ): ZIO[Console with Blocking with Config, Throwable, Unit] =
     config.exists
       .flatMap(_ match {
         case true  => putStrLn("Picked up user config.")    *> config.read
         case false => putStrLn("No user config, creating.") *> config.create
       })
-      .as(ExitCode(0))
+      .as(())
 
-  def printCommand(args: List[String]) =
-    app
-      .parse(args)
-      .foldM(
-        _ => putStrLnErr("Error while expanding path arguments."),
-        _ match {
-          case Some(value) => putStrLn("Command: " + value.toString)
-          case None        => putStrLn("Invalid command.") // TODO: add help
-        }
-      )
-
-  def printConfig: ZIO[Console with config.ConfigPaths, Nothing, Unit] =
-    ZIO
-      .access[config.ConfigPaths](identity)
-      .flatMap(hasCfg => {
-        val cfg = hasCfg.get
-        putStrLn(s"${cfg.base} ${cfg.directories}")
-      })
+  lazy val bootstrap = (Context.live ++ Blocking.live) >>> Config.live
 
   override def run(args: List[String]): URIO[ZEnv, ExitCode] =
-    printConfig
+    program(args)
       .provideCustomLayer(bootstrap)
       .foldM(
         err => putStrErr(s"Unrecoverable error: $err").as(ExitCode(1)),

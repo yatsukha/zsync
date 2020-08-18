@@ -1,5 +1,6 @@
 # User added
 
+.bsp/
 Example.scala
 
 # Created by https://www.toptal.com/developers/gitignore/api/scala,sbt,metals
