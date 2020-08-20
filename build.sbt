@@ -8,10 +8,11 @@ lazy val root = (project in file("."))
     name := "zsync",
     graalVMNativeImageOptions := Seq(
       "--initialize-at-build-time=scala.runtime.Statics$VM",
-      "--no-fallback"
+      "--no-fallback",
+      "-H:IncludeResources=app.config"
     ),
-    libraryDependencies += "dev.zio" %% "zio"         % "1.0.0",
-    libraryDependencies += "dev.zio" %% "zio-streams" % "1.0.0"
+    libraryDependencies += "dev.zio" %% "zio"         % "1.0.1",
+    libraryDependencies += "dev.zio" %% "zio-nio"     % "1.0.0-RC9",
   )
 
 enablePlugins(GraalVMNativeImagePlugin)

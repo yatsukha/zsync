@@ -25,19 +25,22 @@ object Main extends zio.App {
     |  help
     |    - outputs this text
     |
-    |  add <directory> [method]
-    |    - ads the given directory to the list of directories that 
+    |  add <method> <directories...>
+    |    - ads the given directories to the list of directories that 
     |      should backed up optionally specifying the method
-    |    - method can be 'recursive' which is the default and backups 
+    |    - method can be 'recursive' which backups 
     |      all files in the given directory, or 'git' which uses git 
     |      ls-files to get the list of files to backup, while also 
     |      adding the .git subdirectory
     |
-    |  remove <directory> 
-    |    - removes the given directory from the backup list
+    |  remove <directories...> 
+    |    - removes the given directories from the backup list
     |  
     |  backup <destination>
-    |    - backs up files to given destination, write more here
+    |    - backs up files to given destination
+    |    - does not replicate directory structure, instead each file is in the
+    |      form of "/home/user/some/path".zip
+    |    - files that were already backed up are skipped
   """.stripMargin
   )
 
@@ -49,16 +52,24 @@ object Main extends zio.App {
   ): ZIO[Console with Blocking with Config, Throwable, Unit] =
     config.exists
       .flatMap(_ match {
-        case true  => putStrLn("Picked up user config.")    *> config.read
-        case false => putStrLn("No user config, creating.") *> config.create
+        case true  => putStrLn("picked up user config")    *> config.read
+        case false => putStrLn("no user config, creating") *> config.create
       })
       .as(())
+
+  def printCommand(
+    args: List[String]
+  ): ZIO[Console with Blocking with Context, Nothing, Unit] =
+      app.parse(args).foldM(
+        err => putStrErr(err),
+        cmd => putStrLn(cmd.toString())
+      )
 
   lazy val bootstrap = (Context.live ++ Blocking.live) >>> Config.live
 
   override def run(args: List[String]): URIO[ZEnv, ExitCode] =
-    program(args)
-      .provideCustomLayer(bootstrap)
+    printCommand(args)
+      .provideCustomLayer(Context.live)
       .foldM(
         err => putStrErr(s"Unrecoverable error: $err").as(ExitCode(1)),
         _   => ZIO.unit.as(ExitCode(0))
