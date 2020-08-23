@@ -7,13 +7,19 @@ import java.text.SimpleDateFormat
 
 sealed trait Mode
 
-case class Recursive() extends Mode
-case class Git()       extends Mode
+case class Recursive() extends Mode {
+  override def toString(): String = "recursive"
+}
 
-case class Entry(path: Path, mode: Mode)
+case class Git() extends Mode {
+  override def toString(): String = "git"
+}
+
+case class Entry(path: Path, mode: Mode) {
+  override def toString(): String = s"$path $mode"
+}
 
 object Entry {
-
   def parse(line: String): ZIO[Any, Throwable, Entry] =
     ZIO.effect(line.trim.split(' ') match {
       case Array(p, m) =>
@@ -31,5 +37,4 @@ object Entry {
           "Invalid line format in config file. Did you edit it manually?"
         )
     })
-
 }

@@ -8,6 +8,13 @@ import zsync.context.Context
 import zsync.config.Mode
 import zsync.config.Recursive
 import zsync.config.Git
+import zsync.app.Add
+import zsync.app.Remove
+import zsync.app.Backup
+import zsync.app.Help
+import zio.console._
+import zsync.config.Entry
+import zsync.config.Config
 
 package object app {
 
@@ -33,8 +40,98 @@ package object app {
           }
       }
 
-    def interpret(a: Action) = ???
+    def interpret(
+      a: Action
+    ): ZIO[Blocking with Config with Console, Nothing, Unit] =
+      a match {
+
+        case Add(mode, dirs) =>
+          config
+            .transformDirectories(entries => {
+              var skipped: ZIO[Console, Nothing, Unit] = ZIO.unit
+              var dirSet: Set[Path]                    = dirs.toSet
+
+              entries.foreach(_ match {
+                case Entry(p, m) =>
+                  if (dirSet.contains(p)) {
+                    dirSet -= p
+                    skipped *>= putStrLn(
+                      s"$p was skipped since it already exists"
+                    )
+                  }
+              })
+
+              skipped
+                .map(_ => entries ++ dirSet.map(p => Entry(p, mode)).toList)
+            })
+            .foldM(
+              err =>
+                putStrLnErr(
+                  s"error while adding given directories: ${err.getMessage}"
+                ),
+              _ => ZIO.unit
+            )
+
+        case Remove(dirs) =>
+          config
+            .transformDirectories(entries => {
+              val dirSet = dirs.toSet
+              entries.partitionMap(e =>
+                e match {
+                  case Entry(p, m) =>
+                    if (dirSet.contains(p))
+                      Left(putStrLn(s"$p was removed from the list"))
+                    else
+                      Right(e)
+                }
+              ) match {
+                case (outputs, entries) =>
+                  ZIO.collectAll(outputs) *> ZIO.succeed(entries)
+              }
+            })
+            .foldM(
+              err =>
+                putStrLnErr(
+                  "error while removing given directories: ${err.getMessage}"
+                ),
+              _ => ZIO.unit
+            )
+
+        case Backup(dest) => ??? // :^)
+        case Help()       => help
+      }
   }
+
+  private lazy val help: ZIO[Console, Nothing, Unit] = putStrLn(
+    """
+    |zsync 0.0.1 - a lacking rsync clone written using ZIO
+    |
+    |usage:
+    |  zsync <action> [argument...]
+    |
+    |action can be any of the following, with respective arguments:
+    |
+    |  help
+    |    - outputs this text
+    |
+    |  add <method> <directories...>
+    |    - ads the given directories to the list of directories that 
+    |      should backed up optionally specifying the method
+    |    - method can be 'recursive' which backups 
+    |      all files in the given directory, or 'git' which uses git 
+    |      ls-files to get the list of files to backup, while also 
+    |      adding the .git subdirectory
+    |
+    |  remove <directories...> 
+    |    - removes the given directories from the backup list
+    |  
+    |  backup <destination>
+    |    - backs up files to given destination
+    |    - does not replicate directory structure, instead each file is in the
+    |      form of "/home/user/some/path".zip
+    |    - files that were already backed up are skipped
+  """.stripMargin
+  )
 
   ///
 

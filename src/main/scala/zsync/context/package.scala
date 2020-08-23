@@ -19,7 +19,7 @@ package object context {
     val live: ZLayer[system.System, Throwable, Context] =
       ZLayer.fromEffect(
         system
-          .env("HOME")
+          .property("user.home")
           .flatMap(_ match {
             case None => ZIO.fail(new RuntimeException("No $HOME in path."))
             case Some(h) =>

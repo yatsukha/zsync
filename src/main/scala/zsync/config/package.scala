@@ -1,9 +1,15 @@
 package zsync
 
 import zio._
+import zio.console._
 import zio.nio.core.file.Path
 import zio.blocking.Blocking
 import zsync.context.Context
+import java.nio.file.OpenOption
+import java.nio.file.StandardOpenOption
+import zio.nio.core.charset.Charset.Standard
+import util._
+import nio.file.Files
 
 package object config {
 
@@ -55,29 +61,37 @@ package object config {
       )
   }
 
-  import util._
-  import nio.file.Files
-
-  def exists: ZIO[Blocking with Config, Nothing, Boolean] =
-    ZIO.access[Config](_.get).flatMap(c => Files.exists(c.directories))
-
   type Entries = List[Entry]
 
-  private val commentPrefix = ":"
+  def transformDirectories[R](
+    f: Entries => ZIO[Blocking with Console, Throwable, Entries]
+  ): ZIO[Console with Blocking with Config, Throwable, Unit] =
+    for {
+      e <- exists
+      entries <- e match {
+        case true  => read
+        case false => create
+      }
+      modified <- f(entries)
+      _        <- persist(modified)
+    } yield ()
 
-  def read: ZIO[Blocking with Config, Throwable, Entries] =
+  private def exists: ZIO[Blocking with Config, Nothing, Boolean] =
+    ZIO.access[Config](_.get).flatMap(c => Files.exists(c.directories))
+
+  private def read: ZIO[Blocking with Config, Throwable, Entries] =
     ZIO
       .access[Config](_.get)
       .flatMap(c => Files.readAllLines(c.directories))
       .flatMap(e =>
         ZIO.collectAll(
           e.map(_.trim)
-            .filter(l => l.size > 0 && !l.startsWith(commentPrefix))
+            .filter(!_.isEmpty)
             .map(Entry.parse)
         )
       )
 
-  def create: ZIO[Blocking with Config, Throwable, Entries] =
+  private def create: ZIO[Blocking with Config, Throwable, Entries] =
     ZIO
       .access[Config](_.get)
       .flatMap(c =>
@@ -86,14 +100,18 @@ package object config {
           case None    => ZIO.unit
         }) *>
           Files.createFile(c.directories) *>
-          Files.writeLines(
-            c.directories,
-            List(
-              commentPrefix +
-                " file created and managed by zsync, do not edit manually!"
-            )
-          ) *>
           ZIO.succeed(List())
       )
+
+  private def persist(e: Entries): ZIO[Blocking with Config, Throwable, Unit] =
+    for {
+      config <- ZIO.access[Config](_.get)
+      _ <- Files.writeLines(
+        config.directories,
+        e.map(_.toString),
+        openOptions =
+          Set(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
+      )
+    } yield ()
 
 }
