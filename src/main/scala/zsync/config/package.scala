@@ -63,7 +63,7 @@ package object config {
 
   type Entries = List[Entry]
 
-  def transformDirectories[R](
+  def transformDirectories(
     f: Entries => ZIO[Blocking with Console, Throwable, Entries]
   ): ZIO[Console with Blocking with Config, Throwable, Unit] =
     for {
@@ -74,6 +74,18 @@ package object config {
       }
       modified <- f(entries)
       _        <- persist(modified)
+    } yield ()
+
+  def withDirectories(
+    f: Entries => ZIO[Blocking with Console, Throwable, Unit]
+  ): ZIO[Console with Blocking with Config, Throwable, Unit] =
+    for {
+      e <- exists
+      entries <- e match {
+        case true  => read
+        case false => create
+      }
+      _ <- f(entries)
     } yield ()
 
   private def exists: ZIO[Blocking with Config, Nothing, Boolean] =

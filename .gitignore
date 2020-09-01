@@ -2,6 +2,7 @@
 
 .bsp/
 Example.scala
+.vscode/
 
 # Created by https://www.toptal.com/developers/gitignore/api/scala,sbt,metals
 # Edit at https://www.toptal.com/developers/gitignore?templates=scala,sbt,metals

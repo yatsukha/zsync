@@ -14,14 +14,15 @@ import zsync.app.Action
 
 object Main extends zio.App {
 
-  // TODO: add interpreting of backup command
+  // today's TODO:
+  //  - add git backup
 
   def program(
     args: List[String]
   ): ZIO[Console with Blocking with Config with Context, Throwable, Unit] =
     Action
       .parse(args)
-      .flatMap(Action.interpret)
+      .flatMap(_.interpret)
       .foldM(
         err => putStrLnErr(err),
         _   => ZIO.unit
