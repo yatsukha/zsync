@@ -30,8 +30,7 @@ import zio.stream.ZStream
 package object app {
 
   sealed trait Action {
-    def interpret
-      : ZIO[Blocking with Console with Config, Nothing, Unit] = ???
+    def interpret: ZIO[Blocking with Console with Config, Nothing, Unit] = ???
   }
 
   case class Add(mode: Mode, dirs: Set[Path]) extends Action {
@@ -177,7 +176,7 @@ package object app {
 
   case class Ls() extends Action {
     override def interpret
-      : ZIO[Blocking with Config with Console with Context, Nothing, Unit] =
+      : ZIO[Blocking with Config with Console, Nothing, Unit] =
       config
         .withDirectories(
           _.map(entry => putStrLn(entry.toString)).reduce(_ *> _)
