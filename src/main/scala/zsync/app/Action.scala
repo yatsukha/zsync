@@ -18,34 +18,57 @@ import zsync.config.Config
 import zio.nio.file.Files
 import java.nio.file.FileVisitOption
 import zio.process.Command
+import java.util.zip.ZipOutputStream
+import java.io.FileOutputStream
+import java.util.zip.ZipEntry
+import java.io.BufferedInputStream
+import java.io.FileInputStream
+import java.nio.file.attribute.FileAttribute
+import java.nio.file.attribute.BasicFileAttributes
+import zio.stream.ZStream
 
 package object app {
 
   sealed trait Action {
-    def interpret: ZIO[Blocking with Config with Console, Nothing, Unit] = ???
+    def interpret
+      : ZIO[Blocking with Console with Config, Nothing, Unit] = ???
   }
 
   case class Add(mode: Mode, dirs: Set[Path]) extends Action {
     override def interpret
-      : ZIO[Blocking with Config with Console, Nothing, Unit] =
+      : ZIO[Blocking with Console with Config, Nothing, Unit] =
       config
-        .transformDirectories(entries => {
-          var skipped: ZIO[Console, Nothing, Unit] = ZIO.unit
-          var dirSet: Set[Path]                    = dirs
+        .transformDirectories(entries =>
+          ZIO.effect {
+            var notifiers: ZIO[Console, Nothing, Unit] = ZIO.unit
+            var dirSet: Set[Path]                      = dirs
+            var updSet: Set[Path]                      = Set()
 
-          entries.foreach(_ match {
-            case Entry(p, m) =>
-              if (dirSet.contains(p)) {
-                dirSet -= p
-                skipped *>= putStrLn(
-                  s"$p was skipped since it already exists"
-                )
-              }
-          })
+            entries.foreach(_ match {
+              case Entry(p, m) =>
+                if (dirSet.contains(p)) {
+                  if (m != mode) {
+                    updSet += p
+                    notifiers *>= putStrLn(
+                      s"$p backup mode updated to ${m.toString.toLowerCase}"
+                    )
+                  } else {
+                    dirSet -= p
+                    notifiers *>= putStrLn(
+                      s"$p was skipped since it already exists"
+                    )
+                  }
+                }
+            })
 
-          skipped
-            .map(_ => entries ++ dirSet.map(p => Entry(p, mode)).toList)
-        })
+            notifiers
+              .map(_ =>
+                entries.filter(e => !updSet.contains(e.path)) ++ dirSet
+                  .map(p => Entry(p, mode))
+                  .toList
+              )
+          }.flatten
+        )
         .foldM(
           err =>
             putStrLnErr(
@@ -57,7 +80,7 @@ package object app {
 
   case class Remove(dirs: Set[Path]) extends Action {
     override def interpret
-      : ZIO[Blocking with Config with Console, Nothing, Unit] =
+      : ZIO[Blocking with Console with Config, Nothing, Unit] =
       config
         .transformDirectories(entries => {
           entries.partitionMap(e =>
@@ -84,7 +107,7 @@ package object app {
 
   case class Backup(dest: Path) extends Action {
     override def interpret
-      : ZIO[Blocking with Config with Console, Nothing, Unit] =
+      : ZIO[Blocking with Console with Config, Nothing, Unit] =
       config
         .withDirectories(
           _.map({
@@ -92,34 +115,23 @@ package object app {
               Files
                 .exists(path)
                 .flatMap(_ match {
-                  case false => putStrErr(s"$path does not exist")
+                  case false => putStrLnErr(s"$path does not exist")
                   case true =>
                     Files
                       .isDirectory(path)
                       .flatMap(_ match {
-                        case false => ???
+                        case false => Backup.backupFile(dest, path)
                         case true =>
                           mode match {
                             case Recursive() =>
-                              putStrLn(s"$path") *> Files
-                                .walk(path)
-                                .foreach(p => putStrLn(s" $p"))
-                            case Git() =>
-                              Command("git", "ls-files")
-                                .workingDirectory(path.toFile)
-                                .lines
-                                .foldM(
-                                  err =>
-                                    putStrLnErr(
-                                      s"error ocurred while running the git command (${err.getMessage}), " +
-                                        s"are you sure $path is a git directory, and that git is installed?"
-                                    ),
-                                  putStrLn(s"git ls-files output for $path") *>
-                                    _.map(ln => putStrLn(s" $ln"))
-                                      .reduce(_ *> _)
-                                )
+                              Backup.backupRecursive(dest, path)
+                            case Git() => Backup.backupGit(dest, path)
                           }
                       })
+                      .foldM(
+                        err => putStrLnErr(err),
+                        _   => putStrLn(s"$path backed up")
+                      )
                 })
           }).reduce(_ *> _)
         )
@@ -147,7 +159,7 @@ package object app {
         |  add <method> <directories...>
         |    - ads the given directories to the list of directories that 
         |      should backed up optionally specifying the method
-        |    - method can be 'recursive' which backups 
+        |    - method can be 'recursive' which 
         |      all files in the given directory, or 'git' which uses git 
         |      ls-files to get the list of files to backup, while also 
         |      adding the .git subdirectory
@@ -156,17 +168,16 @@ package object app {
         |    - removes the given directories from the backup list
         |  
         |  backup <destination>
-        |    - backs up files to given destination
-        |    - does not replicate directory structure, instead each file is in the
-        |      form of "/home/user/some/path".zip
-        |    - files that were already backed up are skipped
+        |    - backs up files to the given destination
+        |    - folder structure is preserved
+        |    - files that have up to date backup are skipped
         """.stripMargin.trim
       )
   }
 
   case class Ls() extends Action {
     override def interpret
-      : ZIO[Blocking with Config with Console, Nothing, Unit] =
+      : ZIO[Blocking with Config with Console with Context, Nothing, Unit] =
       config
         .withDirectories(
           _.map(entry => putStrLn(entry.toString)).reduce(_ *> _)
@@ -262,6 +273,97 @@ package object app {
       case Nil => ZIO.fail("'backup' requires a destination folder")
       case _   => expandPaths(args).map(paths => Backup(paths.head))
     }
+
+    private def backupFile(
+      backupPath: Path,
+      file: Path
+    ): ZIO[Blocking, String, Unit] =
+      for {
+        parent <- file.parent match {
+          case Some(parent) => ZIO.succeed(parent)
+          case None         => ZIO.fail(s"$file is in root directory")
+        }
+        _ <- zip(destinationFrom(backupPath, file), parent, Seq(file))
+      } yield ()
+
+    private def backupRecursive(
+      backupPath: Path,
+      dir: Path
+    ): ZIO[Blocking, String, Unit] =
+      for {
+        files <- tree(dir)
+        _     <- zip(destinationFrom(backupPath, dir), dir, files)
+      } yield ()
+
+    private def backupGit(
+      backupPath: Path,
+      dir: Path
+    ): ZIO[Blocking, String, Unit] =
+      (for {
+        tracked <- Command("git", "ls-files").workingDirectory(dir.toFile).lines
+        dotGit  <- tree(dir / ".git")
+        _ <- zip(
+          destinationFrom(backupPath, dir),
+          dir,
+          tracked.map(dir / _) ++ dotGit
+        )
+      } yield ()).fold(
+        err => s"$dir not a git directory, or git is not installed",
+        identity
+      )
+
+    private def destinationFrom(backupPath: Path, directoryPath: Path): Path =
+      Path(backupPath.toString + directoryPath.toString) / Path("base.zip")
+
+    private def tree(base: Path): ZIO[Blocking, Nothing, List[Path]] =
+      Files
+        .walk(base)
+        .filterM(p => Files.isDirectory(p).map(!_))
+        .runCollect
+        .map(_.toList)
+        .orDie
+
+    private def zip(
+      out: Path,
+      base: Path,
+      files: Seq[Path]
+    ): ZIO[Blocking, String, Unit] =
+      (
+        ZIO
+          .effect(out.parent match {
+            case None          => ZIO.unit
+            case Some(parents) => Files.createDirectories(parents)
+          })
+          .flatten *>
+          Files.createFile(out)
+      ).fold(err => s"failed while creating backup tree $err", identity) *>
+        ZManaged
+          .makeEffect(
+            new ZipOutputStream(
+              new FileOutputStream(out.toFile)
+            )
+          )(
+            _.close()
+          )
+          .use(zos =>
+            ZIO.effect { // leaky abstractions ahead :^)
+              val buffer = Array.ofDim[Byte](8096)
+
+              files.foreach(file => {
+                val in =
+                  new BufferedInputStream(new FileInputStream(file.toFile))
+                zos.putNextEntry(new ZipEntry(base.relativize(file).toString))
+                var read = in.read(buffer, 0, buffer.length)
+                while (read != -1) {
+                  zos.write(buffer, 0, read)
+                  read = in.read(buffer, 0, buffer.length)
+                }
+                in.close()
+                zos.closeEntry()
+              })
+            }
+          )
+          .fold(err => s"failed while zipping: ${err.getMessage}", identity)
   }
 
 }

@@ -78,7 +78,7 @@ package object config {
 
   def withDirectories(
     f: Entries => ZIO[Blocking with Console, Throwable, Unit]
-  ): ZIO[Console with Blocking with Config, Throwable, Unit] =
+  ) =
     for {
       e <- exists
       entries <- e match {
