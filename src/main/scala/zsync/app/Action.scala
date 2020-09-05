@@ -145,7 +145,8 @@ package object app {
       : ZIO[Blocking with Config with Console, Nothing, Unit] =
       putStrLn(
         """
-        |zsync 0.0.1 - a lacking rsync clone written using ZIO
+        |zsync 0.1.0 - a lacking rsync clone written using ZIO
+        |            - see https://zio.dev/
         |
         |usage:
         |  zsync <action> [argument...]
@@ -156,20 +157,24 @@ package object app {
         |    - outputs this text
         |
         |  add <method> <directories...>
-        |    - ads the given directories to the list of directories that 
-        |      should backed up optionally specifying the method
-        |    - method can be 'recursive' which 
+        |    - ads the given directories (or files) to the list of directories
+        |      that should be backed up
+        |    - method can be 'recursive' which backs up
         |      all files in the given directory, or 'git' which uses git 
         |      ls-files to get the list of files to backup, while also 
-        |      adding the .git subdirectory
+        |      adding the .git subdirectory to preserve history
+        |
+        |  list
+        |    - lists directories and their backup methods
         |
         |  remove <directories...> 
         |    - removes the given directories from the backup list
         |  
         |  backup <destination>
-        |    - backs up files to the given destination
-        |    - folder structure is preserved
-        |    - files that have up to date backup are skipped
+        |    - backs up files to the given destination using zip archives
+        |    - if the destination folder does not exist it will be created
+        |    - folder structures are preserved
+        |    - files that are up to date backup are skipped
         """.stripMargin.trim
       )
   }
@@ -207,7 +212,7 @@ package object app {
       }
   }
 
-  ///
+  /// messy implementations :^)
 
   private sealed trait RequiresArgs {
     def fromArgs(
@@ -298,18 +303,32 @@ package object app {
       backupPath: Path,
       dir: Path
     ): ZIO[Blocking, String, Unit] =
-      (for {
-        tracked <- Command("git", "ls-files").workingDirectory(dir.toFile).lines
-        dotGit  <- tree(dir / ".git")
-        _ <- zip(
-          destinationFrom(backupPath, dir),
-          dir,
-          tracked.map(dir / _) ++ dotGit
-        )
-      } yield ()).fold(
-        err => s"$dir not a git directory, or git is not installed",
-        identity
-      )
+      for {
+        files <- Command("git", "ls-files")
+          .workingDirectory(dir.toFile)
+          .lines
+          .map(_.map(dir / _).toList)
+          .mapError(_ =>
+            s"$dir is not a git repository or git is not installed"
+          )
+        dotGit <- tree(dir / ".git")
+        _      <- zip(destinationFrom(backupPath, dir), dir, files ++ dotGit)
+      } yield ()
+
+    private def isUpToDate(
+      backupFile: Path,
+      paths: Seq[Path]
+    ): ZIO[Blocking, Nothing, Boolean] =
+      Files
+        .exists(backupFile)
+        .flatMap(_ match {
+          case false => ZIO.succeed(false)
+          case true =>
+            for {
+              lastModified <- ZIO.succeed(backupFile.toFile.lastModified)
+              noNewer = paths.find(_.toFile.lastModified > lastModified).isEmpty
+            } yield noNewer
+        })
 
     private def destinationFrom(backupPath: Path, directoryPath: Path): Path =
       Path(backupPath.toString + directoryPath.toString) / Path("base.zip")
@@ -327,15 +346,23 @@ package object app {
       base: Path,
       files: Seq[Path]
     ): ZIO[Blocking, String, Unit] =
-      (
-        ZIO
-          .effect(out.parent match {
-            case None          => ZIO.unit
-            case Some(parents) => Files.createDirectories(parents)
-          })
-          .flatten *>
-          Files.createFile(out)
-      ).fold(err => s"failed while creating backup tree $err", identity) *>
+      (isUpToDate(out, files).flatMap(_ match {
+        case true  => ZIO.fail(s"$base is already up to date")
+        case false => ZIO.unit
+      })) *>
+        (Files
+          .exists(out)
+          .flatMap(_ match {
+            case true => ZIO.unit
+            case false =>
+              ZIO
+                .effect(out.parent match {
+                  case None          => ZIO.unit
+                  case Some(parents) => Files.createDirectories(parents)
+                })
+                .flatten *> Files.createFile(out)
+          }))
+          .mapError(_ => s"$base failed while creating backup tree") *>
         ZManaged
           .makeEffect(
             new ZipOutputStream(
@@ -345,7 +372,7 @@ package object app {
             _.close()
           )
           .use(zos =>
-            ZIO.effect { // leaky abstractions ahead :^)
+            ZIO.effect { // don't look ahead if you are scared of low level programming
               val buffer = Array.ofDim[Byte](8096)
 
               files.foreach(file => {
@@ -362,7 +389,7 @@ package object app {
               })
             }
           )
-          .fold(err => s"failed while zipping: ${err.getMessage}", identity)
+          .mapError(err => s"failed while zipping: ${err.getMessage}")
   }
 
 }

@@ -9,9 +9,9 @@ import zsync.app._
 
 object Main extends zio.App {
 
-  // today's TODO:
-  //  - add handling of existing files
-  //  - refactor zip so that it uses a stream of ZManaged
+  // TODO:
+  //  - refactor zip so that it uses a stream of ZManaged to handle
+  //    files and zip entries
 
   def program(
     args: List[String]
