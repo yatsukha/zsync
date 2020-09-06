@@ -31,8 +31,11 @@ object Main extends zio.App {
     program(args)
       .provideCustomLayer(dependencies)
       .foldM(
-        err => putStrLnErr(s"Unrecoverable error: $err").as(ExitCode(1)),
-        _   => ZIO.succeed(ExitCode(0))
+        err =>
+          putStrLnErr(s"Unrecoverable error: ${err.getMessage}") *>
+            putStrLnErr(err.getStackTrace.map(_.toString).mkString("\n"))
+              .as(ExitCode(1)),
+        _ => ZIO.succeed(ExitCode(0))
       )
 
 }
