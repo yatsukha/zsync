@@ -346,50 +346,53 @@ package object app {
       base: Path,
       files: Seq[Path]
     ): ZIO[Blocking, String, Unit] =
-      (isUpToDate(out, files).flatMap(_ match {
-        case true  => ZIO.fail(s"$base is already up to date")
-        case false => ZIO.unit
-      })) *>
-        (Files
-          .exists(out)
-          .flatMap(_ match {
-            case true => ZIO.unit
-            case false =>
-              ZIO
-                .effect(out.parent match {
-                  case None          => ZIO.unit
-                  case Some(parents) => Files.createDirectories(parents)
-                })
-                .flatten *> Files.createFile(out)
-          }))
-          .mapError(_ => s"$base failed while creating backup tree") *>
-        ZManaged
+      for {
+        upToDate <- isUpToDate(out, files)
+        _ <- upToDate match {
+          case true  => ZIO.fail(s"$base is already up to date")
+          case false => ZIO.unit
+        }
+        exists <- Files.exists(out)
+        fileCreation = exists match {
+          case true => ZIO.unit
+          case false =>
+            (out.parent match {
+              case None         => ZIO.unit
+              case Some(parent) => Files.createDirectories(parent)
+            }) *> Files.createFile(out)
+        }
+        _ <- fileCreation.mapError(_ =>
+          s"$base failed while creating backup tree"
+        )
+        buffer = Array.ofDim[Byte](8192)
+        canFail = ZManaged
           .makeEffect(
-            new ZipOutputStream(
-              new FileOutputStream(out.toFile)
-            )
-          )(
-            _.close()
-          )
+            new ZipOutputStream(new FileOutputStream(out.toFile))
+          )(_.close())
           .use(zos =>
-            ZIO.effect { // don't look ahead if you are scared of low level programming
-              val buffer = Array.ofDim[Byte](8096)
-
-              files.foreach(file => {
-                val in =
-                  new BufferedInputStream(new FileInputStream(file.toFile))
-                zos.putNextEntry(new ZipEntry(base.relativize(file).toString))
-                var read = in.read(buffer, 0, buffer.length)
-                while (read != -1) {
-                  zos.write(buffer, 0, read)
-                  read = in.read(buffer, 0, buffer.length)
-                }
-                in.close()
-                zos.closeEntry()
-              })
-            }
+            ZIO.collectAll(
+              files.map(p =>
+                (ZManaged.makeEffect(
+                  new BufferedInputStream(new FileInputStream(p.toFile))
+                )(_.close()) <*> ZManaged.makeEffect(
+                    zos.putNextEntry(new ZipEntry(base.relativize(p).toString))
+                  )(_ => zos.closeEntry())).use({
+                  case (inputStream, _) =>
+                    ZIO.effect {
+                      var read = inputStream.read(buffer, 0, buffer.length)
+                      while (read != -1) {
+                        zos.write(buffer, 0, read)
+                        read = inputStream.read(buffer, 0, buffer.length)
+                      }
+                    }
+                })
+              )
+            )
           )
-          .mapError(err => s"failed while zipping: ${err.getMessage}")
+        _ <- canFail.mapError(_ =>
+          s"$base failed while zipping, archive might be in an incomplete state"
+        )
+      } yield ()
   }
 
 }
