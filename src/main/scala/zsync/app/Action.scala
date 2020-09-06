@@ -157,7 +157,7 @@ package object app {
         |    - outputs this text
         |
         |  add <method> <directories...>
-        |    - ads the given directories (or files) to the list of directories
+        |    - adds the given directories (or files) to the list of directories
         |      that should be backed up
         |    - method can be 'recursive' which backs up
         |      all files in the given directory, or 'git' which uses git 
