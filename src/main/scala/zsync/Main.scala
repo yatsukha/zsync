@@ -9,9 +9,6 @@ import zsync.app._
 
 object Main extends zio.App {
 
-  // TODO:
-  //  - test zip refactor
-
   def program(
     args: List[String]
   ): ZIO[Console with Blocking with Config with Context, Throwable, Unit] =

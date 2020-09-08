@@ -349,12 +349,11 @@ package object app {
       for {
         upToDate <- isUpToDate(out, files)
         _ <- upToDate match {
-          case true  => ZIO.fail(s"${
-            if (files.size == 1)
+          case true =>
+            ZIO.fail(s"${if (files.size == 1)
               files.head
             else
-              base
-          } is already up to date")
+              base} is already up to date")
           case false => ZIO.unit
         }
 
