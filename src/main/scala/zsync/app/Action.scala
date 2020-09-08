@@ -349,9 +349,15 @@ package object app {
       for {
         upToDate <- isUpToDate(out, files)
         _ <- upToDate match {
-          case true  => ZIO.fail(s"$base is already up to date")
+          case true  => ZIO.fail(s"${
+            if (files.size == 1)
+              files.head
+            else
+              base
+          } is already up to date")
           case false => ZIO.unit
         }
+
         exists <- Files.exists(out)
         fileCreation = exists match {
           case true => ZIO.unit
@@ -364,6 +370,7 @@ package object app {
         _ <- fileCreation.mapError(_ =>
           s"$base failed while creating backup tree"
         )
+
         buffer = Array.ofDim[Byte](8192)
         canFail = ZManaged
           .makeEffect(
@@ -375,8 +382,8 @@ package object app {
                 (ZManaged.makeEffect(
                   new BufferedInputStream(new FileInputStream(p.toFile))
                 )(_.close()) <*> ZManaged.makeEffect(
-                    zos.putNextEntry(new ZipEntry(base.relativize(p).toString))
-                  )(_ => zos.closeEntry())).use({
+                  zos.putNextEntry(new ZipEntry(base.relativize(p).toString))
+                )(_ => zos.closeEntry())).use({
                   case (inputStream, _) =>
                     ZIO.effect {
                       var read = inputStream.read(buffer, 0, buffer.length)
